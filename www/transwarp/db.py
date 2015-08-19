@@ -1,9 +1,8 @@
 #!/usr/bin/env python
 #-*- coding:utf-8 -*-
-import time,uuid,functools,threading,logging
+import time,uuid,functools,threading
 
 #Dict object
-
 class Dict(dict):
     """
     Simple dict object, but allow access like x.y
@@ -39,7 +38,7 @@ class DBError(Exception):
 class MultiColumnError(DBError):
     pass
 
-class _LasyConnection(object):
+class _LazyConnection(object):
     """
     Class performs actual connecton, cursor and commit operations
 
@@ -65,6 +64,7 @@ class _LasyConnection(object):
 
 class _DbCtx(threading.local):
     """
+   
     Thread local object that holds _Lazyconnection object and the counter of
     transactions
 
@@ -81,7 +81,7 @@ class _DbCtx(threading.local):
         self.transactions = 0
 
     def cleanup(self):
-        self.connection.cleaup()
+        self.connection.cleanup()
         self.connection = None
 
     def cursor(self):
@@ -92,8 +92,7 @@ _db_ctx = _DbCtx()
 
 #global object engine
 engine = None
-
-class _Engin(object):
+class _Engine(object):
     def __init__(self,connect):
         self._connect = connect
 
@@ -162,12 +161,12 @@ class _TransactionCtx(object):
         global _db_ctx
         self.should_close_conn = False
         if not _db_ctx.is_init():
-            _db_ct.init()
+            _db_ctx.init()
             self.should_close_conn = True
         _db_ctx.transactions = _db_ctx.transactions + 1
         return self
         
-    def __exit__(self,extype,excvalue,traceback):
+    def __exit__(self,exctype,excvalue,traceback):
         global _db_ctx
         _db_ctx.transactions = _db_ctx.transactions -1
         try:
@@ -179,7 +178,8 @@ class _TransactionCtx(object):
         finally:
             if self.should_close_conn:
                 _db_ctx.cleanup()
-     def commit(self):
+
+    def commit(self):
         global _db_ctx
         try:
             _db_ctx.connection.commit()
@@ -187,7 +187,7 @@ class _TransactionCtx(object):
             _db_ctx.connection.rollback()
             raise
 
-     def rollback(self):
+    def rollback(self):
         global _db_ctx
         _db_ctx.connection.rollback()
 
@@ -203,21 +203,74 @@ def with_transaction(func):
      Transaction decorator
 
     """
-    @functools.wraps(func):
+    @functools.wraps(func)
     def _wrapper(*args,**kw):
         with _TransactionCtx():
             return func(*args,**kw)
     return _wrapper
     
+def _select(sql,first,*args):
+    """
+    Execute sql statement and return result list or one result
 
-def select(sql):
-    pass
+    """
+    global _db_ctx
+    cursor = None
+    try:
+        cursor = _db_ctx.connection.cursor()
+        cursor.execute(sql,args)
+        if cursor.description:
+            names = [x[0] for x in cursor.description]
+        if first:
+            values = cursor.fetchone()
+            if not values:
+                return None
+            return Dict(names,values)
+        return [Dict(names,x) for x in cursor.fetchall()]
+
+    finally:
+        
+        if cursor:
+            cursor.close()
+
+@with_connection
+def select_one(sql,*args):
+    """
+    Return the first found result or None
+    
+    """
+    return _select(sql,True,*args)
+
+@with_connection
+def select_all(sql,*args):
+    """
+    Execute select SQL and return list or empty list if no result
+    
+    """
+    return _select(sql,False,*args)
+    
+@with_connection
+def _update(sql,*args):
+    global _db_ctx
+    cursor = None
+    try:
+        cursor = _db_ctx.connection.cursor()
+        cursor.execute(sql,args)
+        r = cursor.rowcount
+        if _db_ctx.transactions == 0:
+            _db_ctx.connection.commit()
+        return r
+    finally:
+        if cursor:
+            cursor.close()
 
 def update(sql,*args):
-    pass
+    
+    return _update(sql,*args)
+    
+def insert(table,**kw):
+    cols,args = zip(*kw.iteritems())
+    
+    sql = 'insert into `%s` (%s) values (%s)' % (table, ','.join(['`%s`' % col for  col in cols]), ','.join(['?' for i in range(len(cols))]))  
 
-def delete(sql):
-    pass
-
-def insert(sql,*args):
-    pass
+    return _update(sql,*args)
