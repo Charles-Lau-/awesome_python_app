@@ -148,6 +148,9 @@ class Model(dict):
    __metaclass__ = ModelMetaclass
    def __init__ (self,**kw):
         super(Model,self).__init__(**kw)
+        for k,v in self.__mappings__.iteritems():
+            if not hasattr(self,k):
+                setattr(self,k,v.default)
 
    def __getattr__(self,key):
         try:
@@ -187,7 +190,9 @@ class Model(dict):
         """
         Find by where clause and return list
         """
-        L =  db.select_all('select * from `%s` %s' % (cls.__table__,where), args)
+        L =  db.select_all('select * from `%s` %s' % (cls.__table__,where), *args)
+        return [cls(**t) for t in L]
+
    @classmethod
    def count_all(cls):
         """
@@ -209,12 +214,7 @@ class Model(dict):
         args = []
         for k,v in self.__mappings__.iteritems():
             if v.updatable:
-                if hasattr(self,k):
-                    arg = getattr(self,k)
-                else:
-                    arg = v.default
-                    setattr(self,k,arg)
-
+                arg = getattr(self,k)
                 L.append('`%s`=?' % k)
                 args.append(arg)
         pk = self.__primary_key__.name
@@ -234,10 +234,8 @@ class Model(dict):
         params = {}
         for k,v in self.__mappings__.iteritems():
             if v.insertable:
-                if not hasattr(self,k):
-                    setattr(self,k,v.default)
                 params[v.name] = getattr(self,k)
-        db.insert('%s' % self._table__,**params) 
+        db.insert('%s' % self.__table__,**params) 
         return self
 
 def _create_table(table_name,mappings):
@@ -252,4 +250,6 @@ def _create_table(table_name,mappings):
             pk = f.name
         sql.append(nullable and '`%s` %s,' % (f.name,ddl) 
                         or'`%s` %s not null,' % (f.name,ddl)) 
-
+    sql.append(' primary key(`%s`)' % pk)
+    sql.append(');')
+    return '\n'.join(sql)
